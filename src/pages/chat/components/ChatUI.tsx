@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-
+import { request } from '@/utils/request';
 import { 
   Tooltip, 
   TooltipContent, 
@@ -12,105 +12,18 @@ import {
   TooltipTrigger 
 } from "@/components/ui/tooltip";
 
-import {generateAICharacters} from "@/config/aiCharacters";
-import { groups } from "@/config/groups";
 import type { AICharacter } from "@/config/aiCharacters";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { SharePoster } from '@/components/SharePoster';
-import { MembersManagement } from '@/components/MembersManagement';
+import { SharePoster } from '@/pages/chat/components/SharePoster';
+import { MembersManagement } from '@/pages/chat/components/MembersManagement';
 import Sidebar from './Sidebar';
 import { AdBanner, AdBannerMobile } from './AdSection';
-// 使用本地头像数据，避免外部依赖
-const getAvatarData = (name: string) => {
-  const colors = ['#1abc9c', '#3498db', '#9b59b6', '#f1c40f', '#e67e22'];
-  const index = (name.charCodeAt(0) + (name.charCodeAt(1) || 0 )) % colors.length;
-  return {
-    backgroundColor: colors[index],
-    text: name[0],
-  };
-};
+import { useUserStore } from '@/store/userStore';
+import { getAvatarData } from '@/utils/avatar';
 
-// 单个完整头像
-const SingleAvatar = ({ user }: { user: User | AICharacter }) => {
-  // 如果有头像就使用头像，否则使用默认的文字头像
-  if ('avatar' in user && user.avatar) {
-    return (
-      <div className="w-full h-full">
-        <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-      </div>
-    );
-  }
-  const avatarData = getAvatarData(user.name);
-  return (
-    <div 
-      className="w-full h-full flex items-center justify-center text-xs text-white font-medium"
-      style={{ backgroundColor: avatarData.backgroundColor }}
-    >
-      {avatarData.text}
-    </div>
-  );
-};
-
-// 左右分半头像
-const HalfAvatar = ({ user, isFirst }: { user: User, isFirst: boolean }) => {
-  if ('avatar' in user && user.avatar) {
-    return (
-      <div 
-        className="w-1/2 h-full"
-        style={{ 
-          borderRight: isFirst ? '1px solid white' : 'none'
-        }}
-      >
-        <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-      </div>
-    );
-  }
-  const avatarData = getAvatarData(user.name);
-  return (
-    <div 
-      className="w-1/2 h-full flex items-center justify-center text-xs text-white font-medium"
-      style={{ 
-        backgroundColor: avatarData.backgroundColor,
-        borderRight: isFirst ? '1px solid white' : 'none'
-      }}
-    >
-      {avatarData.text}
-    </div>
-  );
-};
-
-// 四分之一头像
-const QuarterAvatar = ({ user, index }: { user: User, index: number }) => {
-  if ('avatar' in user && user.avatar) {
-    return (
-      <div 
-        className="aspect-square"
-        style={{ 
-          borderRight: index % 2 === 0 ? '1px solid white' : 'none',
-          borderBottom: index < 2 ? '1px solid white' : 'none'
-        }}
-      >
-        <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-      </div>
-    );
-  }
-  const avatarData = getAvatarData(user.name);
-  return (
-    <div 
-      className="aspect-square flex items-center justify-center text-[8px] text-white font-medium"
-      style={{ 
-        backgroundColor: avatarData.backgroundColor,
-        borderRight: index % 2 === 0 ? '1px solid white' : 'none',
-        borderBottom: index < 2 ? '1px solid white' : 'none'
-      }}
-    >
-      {avatarData.text}
-    </div>
-  );
-};
 
 // 修改 KaTeXStyle 组件
 const KaTeXStyle = () => (
@@ -139,54 +52,144 @@ const KaTeXStyle = () => (
   `}} />
 );
 
-const ChatUI = () => {
-  // 使用当前选中的群组在 groups 数组中的索引
-  const [selectedGroupIndex, setSelectedGroupIndex] = useState(0); // 默认选中第1个群组
-  const [group, setGroup] = useState(groups[selectedGroupIndex]);
-  const [isGroupDiscussionMode, setIsGroupDiscussionMode] = useState(group.isGroupDiscussionMode);
-  const groupAiCharacters = generateAICharacters(group.name)
-    .filter(character => group.members.includes(character.id))
-    .sort((a, b) => {
-      return group.members.indexOf(a.id) - group.members.indexOf(b.id);
-    });
-  const allNames = groupAiCharacters.map(character => character.name);
-  allNames.push('user');
-  const [users, setUsers] = useState([
-    { id: 1, name: "我" },
-    ...groupAiCharacters
-  ]);
-  const [showMembers, setShowMembers] = useState(false);
-  const [messages, setMessages] = useState([
 
-  ]);
+const ChatUI = () => {
+  const userStore = useUserStore();
+
+  //获取url参数
+  const urlParams = new URLSearchParams(window.location.search);
+  const id = urlParams.get('id')? parseInt(urlParams.get('id')!) : 0;
+  // 1. 所有的 useState 声明
+  const [groups, setGroups] = useState([]);
+  const [selectedGroupIndex, setSelectedGroupIndex] = useState(id);
+  const [group, setGroup] = useState(null);
+  const [groupAiCharacters, setGroupAiCharacters] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [isGroupDiscussionMode, setIsGroupDiscussionMode] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [allNames, setAllNames] = useState([]);
+  const [showMembers, setShowMembers] = useState(false);
+  const [messages, setMessages] = useState([]);
   const [showAd, setShowAd] = useState(true);
   const [inputMessage, setInputMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const [pendingContent, setPendingContent] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [mutedUsers, setMutedUsers] = useState<string[]>([]);
+  const [showPoster, setShowPoster] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // 2. 所有的 useRef 声明
   const currentMessageRef = useRef<number | null>(null);
   const typewriterRef = useRef<NodeJS.Timeout | null>(null);
-  const accumulatedContentRef = useRef(""); // 用于跟踪完整内容
+  const accumulatedContentRef = useRef(""); 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatAreaRef = useRef<HTMLDivElement>(null);
+  const abortController = useRef(new AbortController());
 
-  // 添加禁言状态
-  const [mutedUsers, setMutedUsers] = useState<string[]>([]);
+  // 添加一个 ref 来跟踪是否已经初始化
+  const isInitialized = useRef(false);
 
-  const abortController = new AbortController();
+  // 3. 所有的 useEffect
+  useEffect(() => {
+    // 如果已经初始化过，则直接返回
+    if (isInitialized.current) return;
 
-  const handleRemoveUser = (userId: number) => {
-    setUsers(users.filter(user => user.id !== userId));
-  };
+    const initData = async () => {
+      try {
+        const response = await request(`/api/init`);
+        if (!response.ok) {
+          throw new Error('初始化数据失败');
+        }
+        const {data} = await response.json();
+        console.log("初始化数据", data);
+        const group = data.groups[selectedGroupIndex];
+        const characters = data.characters;
+        setGroups(data.groups);
+        setGroup(group);
+        setIsInitializing(false);
+        setIsGroupDiscussionMode(group.isGroupDiscussionMode);
+        const groupAiCharacters = characters
+          .filter(character => group.members.includes(character.id))
+          .filter(character => character.personality !== "sheduler")
+          .sort((a, b) => {
+            return group.members.indexOf(a.id) - group.members.indexOf(b.id);
+          });
+        setGroupAiCharacters(groupAiCharacters);
+        const allNames = groupAiCharacters.map(character => character.name);
+        allNames.push('user');
+        let avatar_url = null;
+        let nickname = '我';
+        setAllNames(allNames);
+        if (data.user && data.user != null) {
+          const response1 = await request('/api/user/info');
+          const userInfo = await response1.json();
+          //设置store
+          userStore.setUserInfo(userInfo.data);
+          avatar_url = userInfo.data.avatar_url;
+          nickname = userInfo.data.nickname;
+        } else {
+          // 设置空的用户信息
+          userStore.setUserInfo({
+            id: 0,
+            phone: '',
+            nickname: nickname,
+            avatar_url: null,
+            status: 0
+          });
+        }
+        setUsers([
+          { id: 1, name: nickname, avatar: avatar_url },
+          ...groupAiCharacters
+        ]);
+      } catch (error) {
+        console.error("初始化数据失败:", error);
+        setIsInitializing(false);
+      }
+    };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
+    initData();
+    // 标记为已初始化
+    isInitialized.current = true;
+  }, [userStore]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // 添加禁言/取消禁言处理函数
+  useEffect(() => {
+    if (messages.length > 0) {
+      setShowAd(false);
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (typewriterRef.current) {
+        clearInterval(typewriterRef.current);
+      }
+    };
+  }, []);
+
+  // 添加一个新的 useEffect 来监听 userStore.userInfo 的变化
+  useEffect(() => {
+    if (userStore.userInfo && users.length > 0) {
+      setUsers(prev => [
+        { id: 1, name: userStore.userInfo.nickname, avatar: userStore.userInfo.avatar_url? userStore.userInfo.avatar_url : null },
+        ...prev.slice(1) // 保留其他 AI 角色
+      ]);
+    }
+  }, [userStore.userInfo]); // 当 userInfo 变化时更新 users
+
+  // 4. 工具函数
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleRemoveUser = (userId: number) => {
+    setUsers(users.filter(user => user.id !== userId));
+  };
+
   const handleToggleMute = (userId: string) => {
     setMutedUsers(prev => 
       prev.includes(userId) 
@@ -195,11 +198,22 @@ const ChatUI = () => {
     );
   };
 
-  useEffect(() => {
-    if (messages.length > 0) {
-      setShowAd(false);
-    }
-  }, [messages]);
+  const handleShareChat = () => {
+    setShowPoster(true);
+  };
+
+  const toggleSidebar = () => {
+    setSidebarOpen(!sidebarOpen);
+  };
+
+  // 5. 加载检查
+  if (isInitializing || !group) {
+    return (
+      <div className="fixed inset-0 bg-gradient-to-br from-orange-50 via-orange-50/70 to-orange-100 flex items-center justify-center">
+        <div className="w-8 h-8 animate-spin rounded-full border-4 border-orange-500 border-t-transparent"></div>
+      </div>
+    );
+  }
 
   const handleSendMessage = async () => {
     //判断是否Loding
@@ -222,12 +236,12 @@ const ChatUI = () => {
     // 构建历史消息数组
     let messageHistory = messages.map(msg => ({
       role: 'user',
-      content: msg.sender.name == "我" ? 'user：' + msg.content :  msg.sender.name + '：' + msg.content,
+      content: msg.sender.name == userStore.userInfo.nickname ? 'user：' + msg.content :  msg.sender.name + '：' + msg.content,
       name: msg.sender.name
     }));
     let selectedGroupAiCharacters = groupAiCharacters;
     if (!isGroupDiscussionMode) {
-      const shedulerResponse = await fetch('/api/scheduler', {
+      const shedulerResponse = await request(`/api/scheduler`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -255,7 +269,7 @@ const ChatUI = () => {
       setMessages(prev => [...prev, aiMessage]);
 
       try {
-        const response = await fetch('/api/chat', {
+        const response = await request(`/api/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -267,7 +281,7 @@ const ChatUI = () => {
             history: messageHistory,
             index: i,
             aiName: selectedGroupAiCharacters[i].name,
-            custom_prompt: selectedGroupAiCharacters[i].custom_prompt + "\n" + group.description
+            custom_prompt: selectedGroupAiCharacters[i].custom_prompt.replace('#groupName#', group.name) + "\n" + group.description
           }),
         });
 
@@ -388,62 +402,14 @@ const ChatUI = () => {
   };
 
   const handleCancel = () => {
-    abortController.abort();
-  };
-
-  // 清理打字机效果
-  useEffect(() => {
-    return () => {
-      if (typewriterRef.current) {
-        clearInterval(typewriterRef.current);
-      }
-    };
-  }, []);
-
-  // 添加对聊天区域的引用
-  const chatAreaRef = useRef<HTMLDivElement>(null);
-
-  // 更新分享函数
-  const [showPoster, setShowPoster] = useState(false);
-
-  const handleShareChat = () => {
-    setShowPoster(true);
-  };
-
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  
-  // 切换侧边栏状态的函数
-  const toggleSidebar = () => {
-    setSidebarOpen(!sidebarOpen);
+    abortController.current.abort();
   };
 
   // 处理群组选择
   const handleSelectGroup = (index: number) => {
-    setSelectedGroupIndex(index);
-    const newGroup = groups[index];
-    setGroup(newGroup);
-    
-    // 重新生成当前群组的 AI 角色，并按照 members 数组的顺序排序
-    const newGroupAiCharacters = generateAICharacters(newGroup.name)
-      .filter(character => newGroup.members.includes(character.id))
-      .sort((a, b) => {
-        return newGroup.members.indexOf(a.id) - newGroup.members.indexOf(b.id);
-      });
-    
-    // 更新用户列表
-    setUsers([
-      { id: 1, name: "我" },
-      ...newGroupAiCharacters
-    ]);
-    setIsGroupDiscussionMode(newGroup.isGroupDiscussionMode);
-    
-    // 重置消息
-    setMessages([]);
-    
-    // 可选：关闭侧边栏（在移动设备上）
-    if (window.innerWidth < 768) {
-      setSidebarOpen(false);
-    }
+    //进行跳转到?id=index
+    window.location.href = `?id=${index}`;
+    return;
   };
 
   return (
@@ -457,6 +423,7 @@ const ChatUI = () => {
             toggleSidebar={toggleSidebar} 
             selectedGroupIndex={selectedGroupIndex}
             onSelectGroup={handleSelectGroup}
+            groups={groups}
           />
           
           {/* 聊天主界面 */}
@@ -491,7 +458,7 @@ const ChatUI = () => {
                           <Tooltip>
                             <TooltipTrigger>
                               <Avatar className="w-7 h-7 border-2 border-white">
-                                {'avatar' in user && user.avatar ? (
+                                {'avatar' in user && user.avatar && user.avatar !== null ? (
                                   <AvatarImage src={user.avatar} />
                                 ) : (
                                   <AvatarFallback style={{ backgroundColor: avatarData.backgroundColor, color: 'white' }}>
@@ -530,8 +497,8 @@ const ChatUI = () => {
                 <div className="space-y-4">
                   {messages.map((message) => (
                     <div key={message.id} 
-                      className={`flex items-start gap-2 ${message.sender.name === "我" ? "justify-end" : ""}`}>
-                      {message.sender.name !== "我" && (
+                      className={`flex items-start gap-2 ${message.sender.name === userStore.userInfo.nickname ? "justify-end" : ""}`}>
+                      {message.sender.name !== userStore.userInfo.nickname && (
                         <Avatar>
                           {'avatar' in message.sender && message.sender.avatar ? (
                             <AvatarImage src={message.sender.avatar} className="w-10 h-10" />
@@ -542,16 +509,16 @@ const ChatUI = () => {
                           )}
                         </Avatar>
                       )}
-                      <div className={message.sender.name === "我" ? "text-right" : ""}>
+                      <div className={message.sender.name === userStore.userInfo.nickname ? "text-right" : ""}>
                         <div className="text-sm text-gray-500">{message.sender.name}</div>
                         <div className={`mt-1 p-3 rounded-lg shadow-sm chat-message ${
-                          message.sender.name === "我" ? "bg-blue-500 text-white text-left" : "bg-white"
+                          message.sender.name === userStore.userInfo.nickname ? "bg-blue-500 text-white text-left" : "bg-white"
                         }`}>
                           <ReactMarkdown 
                             remarkPlugins={[remarkGfm, remarkMath]}
                             rehypePlugins={[rehypeKatex]}
                             className={`prose dark:prose-invert max-w-none ${
-                              message.sender.name === "我" ? "text-white [&_*]:text-white" : ""
+                              message.sender.name === userStore.userInfo.nickname ? "text-white [&_*]:text-white" : ""
                             }
                             [&_h2]:py-1
                             [&_h2]:m-0
@@ -589,7 +556,7 @@ const ChatUI = () => {
                           )}
                         </div>
                       </div>
-                      {message.sender.name === "我" && (
+                      {message.sender.name === userStore.userInfo.nickname && (
                         <Avatar>
                          {'avatar' in message.sender && message.sender.avatar ? (
                             <AvatarImage src={message.sender.avatar} className="w-10 h-10" />
